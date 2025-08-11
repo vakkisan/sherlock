@@ -18,7 +18,7 @@ except ImportError:
 
 import csv
 import signal
-import pandas as pd
+# import pandas as pd  # Lazy import to avoid heavy dependency
 import os
 import re
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
@@ -956,18 +956,22 @@ def main():
                 exists.append(str(results[site]["status"].status))
                 http_status.append(results[site]["http_status"])
 
-            DataFrame = pd.DataFrame(
-                {
-                    "username": usernames,
-                    "name": names,
-                    "url_main": url_main,
-                    "url_user": url_user,
-                    "exists": exists,
-                    "http_status": http_status,
-                    "response_time_s": response_time_s,
-                }
-            )
-            DataFrame.to_excel(f"{username}.xlsx", sheet_name="sheet1", index=False)
+            try:
+                import pandas as pd
+                DataFrame = pd.DataFrame(
+                    {
+                        "username": usernames,
+                        "name": names,
+                        "url_main": url_main,
+                        "url_user": url_user,
+                        "exists": exists,
+                        "http_status": http_status,
+                        "response_time_s": response_time_s,
+                    }
+                )
+                DataFrame.to_excel(f"{username}.xlsx", sheet_name="sheet1", index=False)
+            except ImportError:
+                print("pandas not available for Excel export")
 
         print()
     query_notify.finish()

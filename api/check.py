@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify
+import json
+from urllib.parse import parse_qs
 
 from sherlock_project.sites import SitesInformation
 from sherlock_project.sherlock import sherlock as run_sherlock
@@ -14,9 +15,6 @@ class QuietNotify(QueryNotify):
 
     def finish(self, message=None):
         return 0
-
-
-app = Flask(__name__)
 
 
 def build_site_data(requested_sites, include_nsfw, json_url=None):
@@ -60,78 +58,67 @@ def serialize_results(username, site_data, results):
     }
 
 
-@app.post("/")
-def check_post():
-    data = request.get_json(silent=True) or {}
-    username = data.get("username")
-    if not username:
-        return jsonify({"error": "username is required"}), 400
-
-    sites = data.get("sites") or None  # list[str], optional
-    include_nsfw = bool(data.get("nsfw", False))
-    timeout = int(data.get("timeout", 30))
-    proxy = data.get("proxy")
-    json_file = data.get("json")  # optional override for data.json (URL or local path)
-    max_sites = int(data.get("max_sites", 30))
-    only_found = bool(data.get("only_found", True))
-
+def handler(request, response):
+    """Vercel serverless function handler"""
     try:
+        # Set CORS headers
+        response.setHeader('Access-Control-Allow-Origin', '*')
+        response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        response.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+        response.setHeader('Content-Type', 'application/json')
+
+        # Handle CORS preflight
+        if request.method == 'OPTIONS':
+            response.status(200).end()
+            return
+
+        # Parse parameters based on method
+        if request.method == 'POST':
+            try:
+                body = json.loads(request.body or '{}')
+            except:
+                body = {}
+            username = body.get('username')
+            sites = body.get('sites')
+            include_nsfw = bool(body.get('nsfw', False))
+            timeout = int(body.get('timeout', 30))
+            proxy = body.get('proxy')
+            json_file = body.get('json')
+            max_sites = int(body.get('max_sites', 30))
+            only_found = bool(body.get('only_found', True))
+        else:  # GET
+            query = request.query
+            username = query.get('username')
+            sites_raw = query.get('sites')
+            sites = [s.strip() for s in sites_raw.split(",")] if sites_raw else None
+            include_nsfw = query.get('nsfw', 'false').lower() == 'true'
+            timeout = int(query.get('timeout', 30))
+            proxy = query.get('proxy')
+            json_file = query.get('json')
+            max_sites = int(query.get('max_sites', 30))
+            only_found = query.get('only_found', 'true').lower() == 'true'
+
+        if not username:
+            response.status(400).json({"error": "username is required"})
+            return
+
         site_data = build_site_data(sites, include_nsfw, json_file)
+        if max_sites and len(site_data) > max_sites:
+            site_data = dict(list(site_data.items())[:max_sites])
+
+        results = run_sherlock(
+            username=username,
+            site_data=site_data,
+            query_notify=QuietNotify(),
+            proxy=proxy,
+            timeout=timeout,
+        )
+        
+        payload = serialize_results(username, site_data, results)
+        if only_found:
+            payload["results"] = [r for r in payload["results"] if r["status"] == "Claimed"]
+
+        response.status(200).json(payload)
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-    if max_sites and len(site_data) > max_sites:
-        site_data = dict(list(site_data.items())[:max_sites])
-
-    results = run_sherlock(
-        username=username,
-        site_data=site_data,
-        query_notify=QuietNotify(),
-        proxy=proxy,
-        timeout=timeout,
-    )
-    payload = serialize_results(username, site_data, results)
-    if only_found:
-        payload["results"] = [r for r in payload["results"] if r["status"] == "Claimed"]
-    return jsonify(payload), 200
-
-
-@app.get("/")
-def check_get():
-    username = request.args.get("username")
-    if not username:
-        return jsonify({"error": "username is required"}), 400
-
-    sites_raw = request.args.get("sites")
-    sites = [s.strip() for s in sites_raw.split(",")] if sites_raw else None
-    include_nsfw = request.args.get("nsfw", "false").lower() == "true"
-    timeout = int(request.args.get("timeout", 30))
-    proxy = request.args.get("proxy")
-    json_file = request.args.get("json")
-    max_sites = int(request.args.get("max_sites", 30))
-    only_found = request.args.get("only_found", "true").lower() == "true"
-
-    try:
-        site_data = build_site_data(sites, include_nsfw, json_file)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-    if max_sites and len(site_data) > max_sites:
-        site_data = dict(list(site_data.items())[:max_sites])
-
-    results = run_sherlock(
-        username=username,
-        site_data=site_data,
-        query_notify=QuietNotify(),
-        proxy=proxy,
-        timeout=timeout,
-    )
-    payload = serialize_results(username, site_data, results)
-    if only_found:
-        payload["results"] = [r for r in payload["results"] if r["status"] == "Claimed"]
-    return jsonify(payload), 200
-
-
-# Exported `app` is discovered by Vercel's Python runtime
-
-
+        response.status(500).json({"error": str(e)})
